@@ -109,25 +109,25 @@ internal class MosaicNode(
 
 	fun setModifier(modifier: Modifier) {
 		topLayer = modifier.foldOut(bottomLayer) { element, nextLayer ->
-			when (element) {
-				is LayoutModifier -> LayoutLayer(element, nextLayer)
-
-				is DrawModifier -> DrawLayer(element, nextLayer)
-
-				is KeyModifier -> KeyLayer(element, nextLayer)
-
-				is ParentDataModifier -> {
-					parentData = element.modifyParentData(parentData)
-					nextLayer
-				}
-
-				is TestTagModifier -> {
-					testTag = element.tag
-					nextLayer
-				}
-
-				else -> nextLayer
+			var nextLayer = nextLayer
+			// The Modifier class can inherit from several key Modifier types
+			// with different processing logic.
+			if (element is LayoutModifier) {
+				nextLayer = LayoutLayer(element, nextLayer)
 			}
+			if (element is DrawModifier) {
+				nextLayer = DrawLayer(element, nextLayer)
+			}
+			if (element is KeyModifier) {
+				nextLayer = KeyLayer(element, nextLayer)
+			}
+			if (element is ParentDataModifier) {
+				parentData = element.modifyParentData(parentData)
+			}
+			if (element is TestTagModifier) {
+				testTag = element.tag
+			}
+			nextLayer
 		}
 	}
 
