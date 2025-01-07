@@ -1,17 +1,30 @@
 # Change log
 
 ## [Unreleased]
-[Unreleased]: https://github.com/JakeWharton/mosaic/compare/0.14.0...HEAD
+[Unreleased]: https://github.com/JakeWharton/mosaic/compare/0.15.0...HEAD
+
+New:
+- Nothing yet!
+
+Changed:
+- Nothing yet!
+
+Fixed:
+- Nothing yet!
+
+
+## [0.15.0] - 2025-01-07
+[0.15.0]: https://github.com/JakeWharton/mosaic/releases/tag/0.15.0
 
 New:
 - Create `mosaic-animation` library, that provides various possibilities for animating Mosaic. An analog of [androidx.compose.animation-core](https://developer.android.com/reference/kotlin/androidx/compose/animation/core/package-summary).
-- Add `IntrinsicSize` and related `Modifier.width/height/requiredWidth/requiredHeight`.
-- New `mosaic-testing` artifact for testing Mosaic.
+- Add `IntrinsicSize` and related `Modifier.width`/`height`/`requiredWidth`/`requiredHeight`.
+- New `mosaic-testing` library for deterministically rendering Mosaic composables under test.
 - Add `Mosaic.layoutId` which allows identifying the element within its parent during layout.
 - Add `Modifier.composed` that allows creating custom reusable modifiers with access to Compose functionality inside.
 
 Changed:
-- Rendering now occurs as fast as possible, although still only when necessary. Previously the maximum FPS was capped to 20 which could cause minor visual delays when processing events.
+- Rendering now occurs as fast as possible, although still only when necessary. Previously the maximum FPS was capped to 20, which could cause minor visual delays when processing events.
 
 Fixed:
 - Fix the handling of custom `Modifier`s that have multiple parents from `LayoutModifier`, `DrawModifier`, `KeyModifier`, `ParentDataModifier`.
