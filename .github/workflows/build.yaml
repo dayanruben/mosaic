@@ -13,7 +13,7 @@ env:
   GRADLE_OPTS: "-Dkotlin.incremental=false -Dorg.gradle.logging.stacktrace=full"
 
 jobs:
-  zig:
+  terminal-zig:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -27,67 +27,134 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: jni-binaries
+          name: mosaic-terminal-jni-libraries
           path: mosaic-terminal/src/jvmMain/resources/jni
           if-no-files-found: error
 
-  tests:
+  terminal-test-binaries:
     needs:
-      - zig
+      - terminal-zig
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: mosaic-terminal-jni-libraries
+          path: mosaic-terminal/src/jvmMain/resources/jni
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version-file: .github/.java-version
+
+      - run: ./gradlew :mosaic-terminal:installJvmTestDistribution :mosaic-terminal:linkNativeDebugTests
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mosaic-terminal-jvm-tests
+          path: mosaic-terminal/build/install/jvmTest
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mosaic-terminal-native-tests
+          path: mosaic-terminal/build/bin
+          if-no-files-found: error
+
+  terminal-tests:
+    needs:
+      - terminal-test-binaries
     strategy:
       fail-fast: false
       matrix:
         platform:
           - os: macOS-13
-            task: macosX64Test
+            target: macosX64
           - os: macOS-14
-            task: macosArm64Test
+            target: macosArm64
           - os: macOS-15
-            task: macosArm64Test
+            target: macosArm64
           - os: ubuntu-20.04
-            task: linuxX64Test
+            target: linuxX64
           - os: ubuntu-22.04
-            task: linuxX64Test
+            target: linuxX64
           - os: ubuntu-24.04
-            task: linuxX64Test
+            target: linuxX64
           - os: windows-2019
-            task: mingwX64Test
+            target: mingwX64
           - os: windows-2022
-            task: mingwX64Test
+            target: mingwX64
+        tests:
+          - type: native
+          - type: java
+            version: 8
+          - type: java
+            version: 11
+          - type: java
+            version: 17
+          - type: java
+            version: 21
+          - type: java
+            version: latest
 
     runs-on: ${{ matrix.platform.os }}
 
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: jni-binaries
-          path: mosaic-terminal/src/jvmMain/resources/jni
+      ### NATIVE
 
-      - uses: actions/setup-java@v4
+      - uses: actions/download-artifact@v4
+        if: matrix.tests.type == 'native'
         with:
-          distribution: 'zulu'
-          java-version: |
-            8
-            11
-            17
-            21
+          name: mosaic-terminal-native-tests
+
+      - name: Set executable bit
+        if: ${{ matrix.tests.type == 'native' && !startsWith(matrix.platform.os, 'windows-') }}
+        run: chmod +x ${{ matrix.platform.target }}/debugTest/test.*
+
+      - run: ${{ matrix.platform.target }}/debugTest/test.*
+        if: matrix.tests.type == 'native'
+        shell: bash
+
+      ### JAVA
+
+      - uses: actions/checkout@v4
+        if: ${{ matrix.tests.type == 'java' && matrix.tests.version == 'latest' }}
+        with:
+          sparse-checkout: .github/.java-version
+          sparse-checkout-cone-mode: false
       - uses: actions/setup-java@v4
+        if: ${{ matrix.tests.type == 'java' && matrix.tests.version == 'latest' }}
         with:
           distribution: 'zulu'
           java-version-file: .github/.java-version
 
-      - run: ./gradlew --continue allJvmTests ${{ matrix.platform.task }}
+      - uses: actions/setup-java@v4
+        if: ${{ matrix.tests.type == 'java' && matrix.tests.version != 'latest' }}
+        with:
+          distribution: 'zulu'
+          java-version: ${{ matrix.tests.version }}
 
-  binaries:
+      - uses: actions/download-artifact@v4
+        if: matrix.tests.type == 'java'
+        with:
+          name: mosaic-terminal-jvm-tests
+
+      - name: Set executable bit
+        if: ${{ matrix.tests.type == 'java' && !startsWith(matrix.platform.os, 'windows-') }}
+        run: chmod +x bin/mosaic-terminal-test
+
+      - run: bin/mosaic-terminal-test
+        if: matrix.tests.type == 'java'
+
+  build:
     runs-on: macos-15
     needs:
-      - zig
+      - terminal-zig
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
-          name: jni-binaries
+          name: mosaic-terminal-jni-libraries
           path: mosaic-terminal/src/jvmMain/resources/jni
 
       - uses: actions/setup-java@v4
@@ -96,51 +163,35 @@ jobs:
           java-version-file: .github/.java-version
       - uses: gradle/actions/setup-gradle@v4
 
-      - run: ./gradlew --continue assemble
+      # Disabling allTests should be enough, but https://youtrack.jetbrains.com/issue/KT-74509
+      # mosaic-terminal runs its tests above. We only run jvmTest otherwise as code is all common.
+      - run: >
+          ./gradlew
+          --continue
+          build
+          -x allTests
+          -x jvmJdk8Test
+          -x jvmJdk11Test
+          -x jvmJdk17Test
+          -x jvmJdk21Test
+          -x jvmJdk23Test
+          -x jvmProGuardTest
+          -x linuxX64Test
+          -x macosArm64Test
+          -x macosX64Test
+          -x mingwX64Test
+          jvmTest
+          -x :mosaic-terminal:jvmTest
 
-  checks:
+  docs:
     runs-on: macos-15
-    needs:
-      - zig
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: jni-binaries
-          path: mosaic-terminal/src/jvmMain/resources/jni
-
       - uses: actions/setup-java@v4
         with:
           distribution: 'zulu'
           java-version-file: .github/.java-version
       - uses: gradle/actions/setup-gradle@v4
-
-      - run: ./gradlew --continue spotlessCheck apiCheck
-
-  publish:
-    runs-on: macos-15
-    needs:
-      - binaries
-      - checks
-      - tests
-
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: jni-binaries
-          path: mosaic-terminal/src/jvmMain/resources/jni
-      - uses: actions/setup-java@v4
-        with:
-          distribution: 'zulu'
-          java-version-file: .github/.java-version
-      - uses: gradle/actions/setup-gradle@v4
-
-      - run: ./gradlew publish
-        if: ${{ github.ref == 'refs/heads/trunk' && github.repository == 'JakeWharton/mosaic' }}
-        env:
-          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.SONATYPE_NEXUS_USERNAME }}
-          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.SONATYPE_NEXUS_PASSWORD }}
 
       - run: ./gradlew dokkaHtmlMultiModule
 
@@ -150,11 +201,55 @@ jobs:
           path: build/dokka/htmlMultiModule/
           if-no-files-found: error
 
+  final-status:
+    if: always()
+    runs-on: ubuntu-latest
+    needs:
+      - docs
+      - terminal-tests
+      - build
+    steps:
+      - name: Check
+        run: |
+          results=$(tr -d '\n' <<< '${{ toJSON(needs.*.result) }}')
+          if ! grep -q -v -E '(failure|cancelled)' <<< "$results"; then
+            echo "One or more required jobs failed"
+            exit 1
+          fi
+
+  publish:
+    if: ${{ github.ref == 'refs/heads/trunk' && github.repository == 'JakeWharton/mosaic' }}
+    runs-on: macos-15
+    needs:
+      - final-status
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: mosaic-terminal-jni-libraries
+          path: mosaic-terminal/src/jvmMain/resources/jni
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version-file: .github/.java-version
+      - uses: gradle/actions/setup-gradle@v4
+
+      - run: ./gradlew publish
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.SONATYPE_NEXUS_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.SONATYPE_NEXUS_PASSWORD }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: html-docs
+          path: html-docs
+
       - uses: JamesIves/github-pages-deploy-action@releases/v3
-        if: ${{ github.ref == 'refs/heads/trunk' && github.repository == 'JakeWharton/mosaic' }}
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BRANCH: site
-          FOLDER: build/dokka/htmlMultiModule/
+          FOLDER: html-docs
           TARGET_FOLDER: docs/latest/
           CLEAN: true
