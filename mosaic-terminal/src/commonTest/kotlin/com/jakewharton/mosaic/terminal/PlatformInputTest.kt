@@ -23,15 +23,44 @@ class PlatformInputTest {
 	}
 
 	@Test fun readWhatWasWritten() {
-		val buffer = ByteArray(100)
+		val buffer = ByteArray(10) { 'x'.code.toByte() }
 
 		writer.write("hello".encodeToByteArray())
-		val readA = input.read(buffer, 0, buffer.size)
-		assertThat(buffer.decodeToString(endIndex = readA)).isEqualTo("hello")
+		val readA = input.read(buffer, 0, 10)
+		assertThat(readA, "readA").isEqualTo(5)
+		assertThat(buffer.decodeToString()).isEqualTo("helloxxxxx")
 
 		writer.write("world".encodeToByteArray())
-		val readB = input.read(buffer, 0, buffer.size)
-		assertThat(buffer.decodeToString(endIndex = readB)).isEqualTo("world")
+		val readB = input.read(buffer, 0, 10)
+		assertThat(readB, "readB").isEqualTo(5)
+		assertThat(buffer.decodeToString()).isEqualTo("worldxxxxx")
+	}
+
+	@Test fun readOnlyUpToCount() {
+		val buffer = ByteArray(10) { 'x'.code.toByte() }
+
+		writer.write("hello".encodeToByteArray())
+		val read = input.read(buffer, 0, 4)
+		assertThat(read).isEqualTo(4)
+		assertThat(buffer.decodeToString()).isEqualTo("hellxxxxxx")
+	}
+
+	@Test fun readUnderflow() {
+		val buffer = ByteArray(10) { 'x'.code.toByte() }
+
+		writer.write("hello".encodeToByteArray())
+		val read = input.read(buffer, 0, 10)
+		assertThat(read).isEqualTo(5)
+		assertThat(buffer.decodeToString()).isEqualTo("helloxxxxx")
+	}
+
+	@Test fun readAtOffset() {
+		val buffer = ByteArray(10) { 'x'.code.toByte() }
+
+		writer.write("hello".encodeToByteArray())
+		val read = input.read(buffer, 5, 5)
+		assertThat(read).isEqualTo(5)
+		assertThat(buffer.decodeToString()).isEqualTo("xxxxxhello")
 	}
 
 	@Test fun readCanBeInterrupted() {

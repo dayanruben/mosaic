@@ -3,24 +3,24 @@
 #if defined(_WIN32)
 
 #include "cutils.h"
+#include <assert.h>
+#include <stdio.h>
 #include <windows.h>
+
+const int recordsCount = 64;
 
 typedef struct platformInputImpl {
 	HANDLE waitHandles[2];
-	HANDLE readHandle;
+	INPUT_RECORD records[recordsCount];
 	platformEventHandler *handler;
 } platformInputImpl;
 
 typedef struct platformInputWriterImpl {
-	HANDLE readHandle;
-	HANDLE writeHandle;
-	HANDLE eventHandle;
 	platformInput *reader;
 } platformInputWriterImpl;
 
 platformInputResult platformInput_initWithHandle(
 	HANDLE stdinRead,
-	HANDLE stdinWait,
 	platformEventHandler *handler
 ) {
 	platformInputResult result = {};
@@ -42,9 +42,8 @@ platformInputResult platformInput_initWithHandle(
 		goto err;
 	}
 
-	reader->waitHandles[0] = stdinWait;
+	reader->waitHandles[0] = stdinRead;
 	reader->waitHandles[1] = interruptEvent;
-	reader->readHandle = stdinRead;
 	reader->handler = handler;
 
 	result.reader = reader;
@@ -59,12 +58,12 @@ platformInputResult platformInput_initWithHandle(
 
 platformInputResult platformInput_init(platformEventHandler *handler) {
 	HANDLE h = GetStdHandle(STD_INPUT_HANDLE);
-	return platformInput_initWithHandle(h, h, handler);
+	return platformInput_initWithHandle(h, handler);
 }
 
 stdinRead platformInput_read(
 	platformInput *reader,
-	void *buffer,
+	char *buffer,
 	int count
 ) {
 	return platformInput_readWithTimeout(reader, buffer, count, INFINITE);
@@ -72,24 +71,58 @@ stdinRead platformInput_read(
 
 stdinRead platformInput_readWithTimeout(
 	platformInput *reader,
-	void *buffer,
+	char *buffer,
 	int count,
 	int timeoutMillis
 ) {
 	stdinRead result = {};
-	DWORD waitResult = WaitForMultipleObjects(2, reader->waitHandles, FALSE, timeoutMillis);
+
+	DWORD waitResult;
+
+	loop:
+	waitResult = WaitForMultipleObjects(2, reader->waitHandles, FALSE, timeoutMillis);
 	if (likely(waitResult == WAIT_OBJECT_0)) {
-		DWORD read = 0;
-		if (likely(ReadFile(reader->readHandle, buffer, count, &read, NULL) != 0)) {
-			// TODO EOF?
-			result.count = read;
-		} else {
+		INPUT_RECORD *records = reader->records;
+		int recordRequest = recordsCount > count ? count : recordsCount;
+		DWORD recordsRead = 0;
+		if (unlikely(!ReadConsoleInputW(reader->waitHandles[0], records, recordRequest, &recordsRead))) {
 			goto err;
 		}
+
+		platformEventHandler *handler = reader->handler;
+		int nextBufferIndex = 0;
+		for (int i = 0; i < (int) recordsRead; i++) {
+			INPUT_RECORD record = records[i];
+			if (record.EventType == KEY_EVENT) {
+				if (record.Event.KeyEvent.wVirtualKeyCode == 0) {
+					buffer[nextBufferIndex++] = record.Event.KeyEvent.uChar.AsciiChar;
+				}
+				// TODO else other key shit
+			} else if (record.EventType == MOUSE_EVENT) {
+				// TODO mouse shit
+			} else if (record.EventType == FOCUS_EVENT) {
+				handler->onFocus(handler->opaque, record.Event.FocusEvent.bSetFocus);
+			} else if (record.EventType == WINDOW_BUFFER_SIZE_EVENT) {
+				handler->onResize(
+					handler->opaque,
+					record.Event.WindowBufferSizeEvent.dwSize.X,
+					record.Event.WindowBufferSizeEvent.dwSize.Y,
+					0, 0
+				);
+			}
+		}
+
+		// Returning 0 would indicate an interrupt, so loop if we haven't read any raw bytes.
+		if (nextBufferIndex == 0) {
+			goto loop;
+		}
+		result.count = nextBufferIndex;
 	} else if (unlikely(waitResult == WAIT_FAILED)) {
 		goto err;
 	}
-	// Else if the interrupt event was selected or we timed out, return a count of 0.
+	// Else return a count of 0 because either:
+	// - The interrupt event was selected (which auto resets its state).
+	// - The user-supplied, non-infinite timeout ran out.
 
 	ret:
 	return result;
@@ -114,6 +147,10 @@ platformError platformInput_free(platformInput *reader) {
 	return result;
 }
 
+// A single global input writer into which fake data can be sent. Creating and closing this over
+// and over eventually produces a failure, so we only do it once per process (since it's test only).
+HANDLE writerConin = NULL;
+
 platformInputWriterResult platformInputWriter_init(platformEventHandler *handler) {
 	platformInputWriterResult result = {};
 
@@ -123,19 +160,26 @@ platformInputWriterResult platformInputWriter_init(platformEventHandler *handler
 		goto ret;
 	}
 
-	if (unlikely(CreatePipe(&writer->readHandle, &writer->writeHandle, NULL, 0) == 0)) {
-		result.error = GetLastError();
-		goto err;
+	HANDLE h = writerConin;
+	if (h == NULL) {
+		// When run as a test, GetStdHandle(STD_INPUT_HANDLE) returns a closed handle which does not
+		// work. Open a new console input handle for our non-display testing purposes.
+		h = CreateFile(TEXT("CONIN$"), GENERIC_READ | GENERIC_WRITE, FILE_SHARE_READ | FILE_SHARE_WRITE, 0, OPEN_EXISTING, 0, 0);
+		if (unlikely(h == INVALID_HANDLE_VALUE)) {
+			result.error = GetLastError();
+			goto err;
+		}
+		if (unlikely(SetConsoleMode(h, ENABLE_WINDOW_INPUT | ENABLE_MOUSE_INPUT | ENABLE_EXTENDED_FLAGS) == 0)) {
+			result.error = GetLastError();
+			goto err;
+		}
+		writerConin = h;
 	}
 
-	HANDLE writeEvent = CreateEvent(NULL, FALSE, FALSE, NULL);
-	if (unlikely(writeEvent == NULL)) {
-		result.error = GetLastError();
-		goto err;
-	}
-	writer->eventHandle = writeEvent;
+	// Ensure we don't start with existing records in the buffer.
+	FlushConsoleInputBuffer(writerConin);
 
-	platformInputResult readerResult = platformInput_initWithHandle(writer->readHandle, writer->eventHandle, handler);
+	platformInputResult readerResult = platformInput_initWithHandle(writerConin, handler);
 	if (unlikely(readerResult.error)) {
 		result.error = readerResult.error;
 		goto err;
@@ -156,50 +200,74 @@ platformInput *platformInputWriter_getReader(platformInputWriter *writer) {
 	return writer->reader;
 }
 
-platformError platformInputWriter_write(platformInputWriter *writer, void *buffer, int count) {
-	// Per https://learn.microsoft.com/en-us/windows/win32/api/namedpipeapi/nf-namedpipeapi-createpipe#remarks
-	// "When a process uses WriteFile to write to an anonymous pipe,
-	//  the write operation is not completed until all bytes are written."
-	if (likely(WriteFile(writer->writeHandle, buffer, count, NULL, NULL)
-			&& SetEvent(writer->eventHandle))) {
-		return 0;
+platformError platformInputWriter_write(platformInputWriter *writer UNUSED, char *buffer, int count) {
+	DWORD result = 0;
+	INPUT_RECORD *records = calloc(count, sizeof(INPUT_RECORD));
+	if (!records) {
+		result = ERROR_NOT_ENOUGH_MEMORY;
+		goto ret;
+	}
+	for (int i = 0; i < count; i++) {
+		records[i].EventType = KEY_EVENT;
+		records[i].Event.KeyEvent.uChar.AsciiChar = buffer[i];
+	}
+
+	DWORD written;
+	if (!WriteConsoleInputW(writerConin, records, count, &written)) {
+		goto err;
+	}
+	// TODO Loop instead.
+	assert(count == (int) written);
+
+	ret:
+	free(records);
+
+	return result;
+
+	err:
+	result = GetLastError();
+	goto ret;
+}
+
+platformError writeRecord(INPUT_RECORD *record) {
+	DWORD written;
+	if (likely(WriteConsoleInputW(writerConin, record, 1, &written))) {
+		if (likely(written == 1)) {
+			return 0;
+		}
+		return ERROR_WRITE_FAULT;
 	}
 	return GetLastError();
 }
 
-void platformInputWriter_focusEvent(platformInputWriter *writer, bool focused) {
- 	platformEventHandler *handler = writer->reader->handler;
- 	handler->onFocus(handler->opaque, focused);
- }
+platformError platformInputWriter_focusEvent(platformInputWriter *writer UNUSED, bool focused) {
+	INPUT_RECORD record;
+	record.EventType = FOCUS_EVENT;
+	record.Event.FocusEvent.bSetFocus = focused;
+	return writeRecord(&record);
+}
 
- void platformInputWriter_keyEvent(platformInputWriter *writer) {
- 	platformEventHandler *handler = writer->reader->handler;
- 	handler->onKey(handler->opaque);
- }
+platformError platformInputWriter_keyEvent(platformInputWriter *writer UNUSED) {
+	// TODO
+	return 0;
+}
 
- void platformInputWriter_mouseEvent(platformInputWriter *writer) {
- 	platformEventHandler *handler = writer->reader->handler;
- 	handler->onMouse(handler->opaque);
- }
+platformError platformInputWriter_mouseEvent(platformInputWriter *writer UNUSED) {
+	// TODO
+	return 0;
+}
 
- void platformInputWriter_resizeEvent(platformInputWriter *writer, int columns, int rows, int width, int height) {
- 	platformEventHandler *handler = writer->reader->handler;
- 	handler->onResize(handler->opaque, columns, rows, width, height);
- }
+platformError platformInputWriter_resizeEvent(platformInputWriter *writer UNUSED, int columns, int rows, int width UNUSED, int height UNUSED) {
+	INPUT_RECORD record;
+	record.EventType = WINDOW_BUFFER_SIZE_EVENT;
+	record.Event.WindowBufferSizeEvent.dwSize.X = columns;
+	record.Event.WindowBufferSizeEvent.dwSize.Y = rows;
+	return writeRecord(&record);
+}
 
 platformError platformInputWriter_free(platformInputWriter *writer) {
-	DWORD result = 0;
-	if (unlikely(CloseHandle(writer->eventHandle) == 0)) {
-		result = GetLastError();
-	}
-	if (unlikely(CloseHandle(writer->writeHandle) == 0 && result == 0)) {
-		result = GetLastError();
-	}
-	if (unlikely(CloseHandle(writer->readHandle) == 0 && result == 0)) {
-		result = GetLastError();
-	}
 	free(writer);
-	return result;
+	return 0;
 }
 
 #endif
