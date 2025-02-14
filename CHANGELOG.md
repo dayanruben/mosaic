@@ -1,16 +1,27 @@
 # Change log
 
 ## [Unreleased]
-[Unreleased]: https://github.com/JakeWharton/mosaic/compare/0.15.0...HEAD
+[Unreleased]: https://github.com/JakeWharton/mosaic/compare/0.16.0...HEAD
+
+New:
+- Nothing yet!
+
+Changed:
+- Nothing yet!
+
+Fixed:
+- Nothing yet!
+
+
+## [0.16.0] - 2025-02-14
+[0.16.0]: https://github.com/JakeWharton/mosaic/releases/tag/0.16.0
 
 New:
 - Add `setContentAndSnapshot` to 'mosaic-testing' which returns the initial composition snapshot. This avoids a potential problem with calling `setContent` and then `awaitSnapshot` since the latter will trigger a subsequent recomposition (if needed), preventing observation of the initial state.
 
 Changed:
 - `Static` composable no longer takes a list. Instead, it behaves like a normal composable which only renders its function once.
-
-Fixed:
-- Nothing yet!
+- Drop use of Jansi library for supporting ANSI color output on Windows.
 
 
 ## [0.15.0] - 2025-01-07
