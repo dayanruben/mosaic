@@ -4,7 +4,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-void throwIse(JNIEnv *env, uint32_t error, const char *prefix) {
+static void throwIse(JNIEnv *env, uint32_t error, const char *prefix) {
 	jclass ise = (*env)->FindClass(env, "java/lang/IllegalStateException");
 
 	int prefixLength = strlen(prefix);
@@ -20,21 +20,21 @@ void throwIse(JNIEnv *env, uint32_t error, const char *prefix) {
 		message[prefixLength + 1] = ' ';
 		// Offset the location of the formatted number by the prefix and colon+space lengths.
 		sprintf(message + prefixLength + colonSpaceLength, "%u", error);
-		(*env)->ThrowNew(env, ise, message);
 	}
+	(*env)->ThrowNew(env, ise, message);
 }
 
-typedef struct jniTtyCallback {
+typedef struct MosaicJniTtyCallback {
 	JNIEnv *env;
 	jobject instance;
 	jmethodID onFocus;
 	jmethodID onKey;
 	jmethodID onMouse;
 	jmethodID onResize;
-} jniTtyCallback;
+} MosaicJniTtyCallback;
 
-void invokeOnFocusCallback(void *opaque, bool focused) {
-	jniTtyCallback *callback = (jniTtyCallback *) opaque;
+static void invokeOnFocusCallback(void *opaque, bool focused) {
+	MosaicJniTtyCallback *callback = (MosaicJniTtyCallback *) opaque;
 	(*callback->env)->CallVoidMethod(
 		callback->env,
 		callback->instance,
@@ -43,8 +43,8 @@ void invokeOnFocusCallback(void *opaque, bool focused) {
 	);
 }
 
-void invokeOnKeyCallback(void *opaque) {
-	jniTtyCallback *callback = (jniTtyCallback *) opaque;
+static void invokeOnKeyCallback(void *opaque) {
+	MosaicJniTtyCallback *callback = (MosaicJniTtyCallback *) opaque;
 	(*callback->env)->CallVoidMethod(
 		callback->env,
 		callback->instance,
@@ -52,8 +52,8 @@ void invokeOnKeyCallback(void *opaque) {
 	);
 }
 
-void invokeOnMouseCallback(void *opaque) {
-	jniTtyCallback *callback = (jniTtyCallback *) opaque;
+static void invokeOnMouseCallback(void *opaque) {
+	MosaicJniTtyCallback *callback = (MosaicJniTtyCallback *) opaque;
 	(*callback->env)->CallVoidMethod(
 		callback->env,
 		callback->instance,
@@ -61,8 +61,8 @@ void invokeOnMouseCallback(void *opaque) {
 	);
 }
 
-void invokeOnResizeCallback(void *opaque, int columns, int rows, int width, int height) {
-	jniTtyCallback *callback = (jniTtyCallback *) opaque;
+static void invokeOnResizeCallback(void *opaque, int columns, int rows, int width, int height) {
+	MosaicJniTtyCallback *callback = (MosaicJniTtyCallback *) opaque;
 	(*callback->env)->CallVoidMethod(
 		callback->env,
 		callback->instance,
@@ -105,7 +105,7 @@ Java_com_jakewharton_mosaic_tty_Jni_ttyCallbackInit(
 		return 0;
 	}
 
-	jniTtyCallback *jniCallback = malloc(sizeof(jniTtyCallback));
+	MosaicJniTtyCallback *jniCallback = malloc(sizeof(MosaicJniTtyCallback));
 	if (unlikely(!jniCallback)) {
 		return 0;
 	}
@@ -136,7 +136,7 @@ Java_com_jakewharton_mosaic_tty_Jni_ttyCallbackFree(
 	jlong callbackOpaque
 ) {
 	MosaicTtyCallback *callback = (MosaicTtyCallback *) callbackOpaque;
-	jniTtyCallback *jniCallback = callback->opaque;
+	MosaicJniTtyCallback *jniCallback = callback->opaque;
 	jobject instance = jniCallback->instance;
 	free(callback);
 	free(jniCallback);
